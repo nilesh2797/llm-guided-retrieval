@@ -18,7 +18,7 @@ Read more in the [blog](https://nilesh2797.github.io/publications/lattice) / [pa
 
 LATTICE proposes an *LLM-native retrieval* paradigm that combines the efficiency of hierarchical search with the reasoning power of modern large language models. Instead of relying on a static retriever + reranker pipeline or attempting to place a large corpus directly in an LLM context, LATTICE organizes the corpus into a semantic tree and uses an LLM as an *active search agent* that navigates that tree. This design yields logarithmic search complexity while preserving the LLM’s ability to perform nuanced, multi-step relevance judgments for complex, reasoning-heavy queries.
 
-## 🚀 Usage
+## Usage
 
 ### Setup
 
@@ -92,7 +92,7 @@ lattice/release/
 └── logs/                   # Execution logs
 ```
 
-## 📈 Results
+## Results
 ### Ranking results on BRIGHT
 <p align="center">
   <img src="assets/lattice-bright-ndcg.png" width="600">
@@ -104,7 +104,7 @@ lattice/release/
 </p>
 
 
-## 📜 Citation
+## Cite
 
 If you find this work helpful, please cite:
 
