@@ -18,6 +18,11 @@ COMMON_PARAMS=(
     --load_existing
     --num_iters 20
     # --rerank
+    # --llm_api_backend vllm
+    # --llm Qwen/Qwen3-VL-8B-Instruct
+    # --llm_api_staggering_delay 0.02
+    # --llm_api_timeout 60
+    # --llm_api_max_retries 3
 )
 
 # Define RUNS directly as strings (space-separated args)
