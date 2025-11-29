@@ -147,7 +147,6 @@ cd scripts
 | `--rerank` | Additional reranking on final results | False |
 | `--load_existing` | Resume from checkpoint defined by hyperparams | False |
 | `--suffix` | Experiment name suffix | - |
-| **vLLM-specific parameters** | | |
 | `--llm_api_backend` | LLM API backend (genai or vllm) | genai |
 | `--llm` | Model name to use | gemini-2.0-flash-thinking-exp-01-21 |
 | `--llm_api_timeout` | API call timeout in seconds | 180 |
