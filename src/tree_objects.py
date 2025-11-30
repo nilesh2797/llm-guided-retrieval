@@ -284,8 +284,9 @@ class InferSample(object):
     return self
 
   def post_load_processing(self):
-    self.calib_model.fit()
-    self.update_relevances(self.prediction_tree)
+    if not self.calib_model.trained: 
+      self.calib_model.fit()
+      self.update_relevances(self.prediction_tree)
 
   @property
   def beam_size(self):
@@ -391,7 +392,7 @@ class InferSample(object):
         self.logger.error(f'Error parsing relevance scores: {relevance_scores}, slate: {slate} with error {e}')
         relevance_scores = None
 
-      if relevance_scores is not None:
+      if relevance_scores:
         self.calib_model.add(relevance_scores)
         cur_node_child_rels = [relevance_scores.get(c.registry_idx, 0) for c in cur_semantic_node.child]
         cur_state.instantiate_children(cur_node_child_rels, reasoning, creation_step=len(self.beam_state_paths_history)+1)

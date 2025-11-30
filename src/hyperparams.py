@@ -29,6 +29,7 @@ def compress_hparam_string(hparam_str: str) -> str:
         if "=" in part:
             key, val = part.split("=", 1)
             if val and val.lower() not in ['false', 'none']:
+                val = val.replace('/', '__')
                 compressed_parts.append(f"{abbreviate_key(key)}={val}")
         else:
             # Handle flag-only parameters
@@ -40,7 +41,7 @@ def compress_hparam_string(hparam_str: str) -> str:
     return final_str
 
 class HyperParams(argparse.Namespace):
-    NO_SAVE_VARS = set(['rerank', 'load_existing', 'llm_max_concurrent_calls', 'num_threads', 'search_with_path_relevance', 'llm_api_timeout', 'llm_api_max_retries'])
+    NO_SAVE_VARS = set(['dataset', 'rerank', 'load_existing', 'llm_max_concurrent_calls', 'num_threads', 'search_with_path_relevance', 'llm_api_timeout', 'llm_api_max_retries', 'llm_api_staggering_delay'])
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -60,6 +61,7 @@ class HyperParams(argparse.Namespace):
         parser = argparse.ArgumentParser(description='Hyperparameters')
         
         # Add common hyperparameters here
+        parser.add_argument('--dataset', type=str, default='BRIGHT')
         parser.add_argument('--subset', type=str, required=True, help='Subset of data to use')
         parser.add_argument('--tree_version', type=str, required=True, help='Version of the tree structure to use')
         parser.add_argument('--traversal_prompt_version', type=int, default=5)
@@ -76,6 +78,7 @@ class HyperParams(argparse.Namespace):
         parser.add_argument('--llm_max_concurrent_calls', type=int, default=20)
         parser.add_argument('--llm_api_timeout', type=int, default=120)
         parser.add_argument('--llm_api_max_retries', type=int, default=4)
+        parser.add_argument('--llm_api_staggering_delay', type=float, default=0.1)
         parser.add_argument('--num_iters', type=int, default=20)
         parser.add_argument('--num_eval_samples', type=int, default=1_000)
         parser.add_argument('--max_beam_size', type=int, default=2)

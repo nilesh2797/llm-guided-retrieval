@@ -1,0 +1,10 @@
+trees/
+results/
+logs/
+*wandb*
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.ipynb_checkpoints/

@@ -49,7 +49,6 @@ TREE_TRAVERSAL_PROMPT_V5_LEAF = '''You are an intelligent search agent evaluatin
 
 **Relevance Definition:** {relevance_defintion}. A passage is considered relevant if its text, read in isolation, directly and substantively contributes to answering the user's query. It must contain actual information, not just references or titles. A passage that only mentions the query's topic but provides no specific details is considered irrelevant
 
-
 ---
 
 ## USER QUERY
@@ -99,45 +98,79 @@ def get_desc_str_from_list(desc_list, max_char_len=None):
   return ''.join(["[{}]. {}\n\n".format(i, re.sub('\n+', ' ', doc[:max_char_len])) for i, doc in enumerate(desc_list)])
 
 def get_relevance_definition(subset):
+    subset = subset.lower()
     RELEVANCE_DEFINITIONS = {
         'leetcode': '''The relevance between queries and positive documents is defined by whether the coding problem (i.e., query) involves the same algorithm and/or data structure. The queries and documents are problems and solutions from LeetCode. The problem descriptions are used as queries Q, and the positive documents D+Q are solved problems (with solutions) that were annotated as similar problems by LeetCode.''',
         'theoremqa_questions': '''A query is relevant to a document if the document references the same/similar theorem used in the query.''',
         'pony': '''The relevance between queries and positive documents is defined by whether the coding problem (i.e., query) requires the corresponding syntax documentation.''',
         'stackexchange': '''A document is considered relevant to a query if it can be cited in an accepted or highly voted answer that helps reason through the query with critical concepts or theories.''',
+        'scifact': '''A document is relevant if it contains sufficient, non-redundant, and minimal evidence (rationale sentences) that can be used to determine the veracity (either *support* OR *refutation*) of a specific scientific claim. The query is a scientific claim, and the documents are abstracts of scientific papers.''',
+        'nq': '''A document is relevant to a query if it contains the answer to the question posed in the query. The query is a natural language web search question, and the documents are passages from wikipedia that may contain the answer.''',
+        "fiqa": '''A document is considered relevant if it contains the specific information needed to answer the associated question.''',
+        'scidocs': '''A query is a source scientific paper (represented by its title and abstract) and a document is a candidate paper from the corpus. A gold document is defined as relevant because it is either directly cited by the query paper or co-viewed (accessed in the same user session) with the query paper in user activity logs.''',
     }
     RELEVANCE_DEFINITIONS['aops'] = RELEVANCE_DEFINITIONS['theoremqa_questions']
     RELEVANCE_DEFINITIONS['theoremqa_theorems'] = RELEVANCE_DEFINITIONS['theoremqa_questions']
     RELEVANCE_DEFINITION = RELEVANCE_DEFINITIONS[subset] if subset in RELEVANCE_DEFINITIONS else RELEVANCE_DEFINITIONS['stackexchange']
     return RELEVANCE_DEFINITION
 
-def get_traversal_prompt_response_constraint(require_reasoning=True) -> Schema:
-    tree_traversal_response_schema = Schema(
-        type=Type.OBJECT,
-        properties=({
-          "reasoning": Schema(
-                type=Type.STRING,
-                description="Step-by-step analysis of why each document is relevant or irrelevant based on the relevance definition"
-            )} if require_reasoning else {}) | {
-            "ranking": Schema(
-                type=Type.ARRAY,
-                items=Schema(type=Type.INTEGER),
-                description="Array of integers representing the order of the candidates by their node_id",
-                minItems=1,
-            ),
-            "relevance_scores": Schema(
-                type=Type.ARRAY,
-                items=Schema(
-                    type=Type.ARRAY,
-                    items=Schema(type=Type.INTEGER),
-                    description="Tuple of [node_id, relevance_score] where relevance_score is 0-100"
-                ),
-                description="Array of tuples, each containing [node_id, relevance_score]",
-                minItems=1,
-            )
-        },
-        required=(["reasoning"] if require_reasoning else []) + ["ranking", "relevance_scores"]
-    )
-    return tree_traversal_response_schema
+def get_traversal_prompt_response_constraint(require_reasoning=True, return_dict=True):
+    if not return_dict:
+      tree_traversal_response_schema = Schema(
+          type=Type.OBJECT,
+          properties=({
+            "reasoning": Schema(
+                  type=Type.STRING,
+                  description="Step-by-step analysis of why each document is relevant or irrelevant based on the relevance definition"
+              )} if require_reasoning else {}) | {
+              "ranking": Schema(
+                  type=Type.ARRAY,
+                  items=Schema(type=Type.INTEGER),
+                  description="Array of integers representing the order of the candidates by their node_id",
+                  minItems=1,
+              ),
+              "relevance_scores": Schema(
+                  type=Type.ARRAY,
+                  items=Schema(
+                      type=Type.ARRAY,
+                      items=Schema(type=Type.INTEGER),
+                      description="Tuple of [node_id, relevance_score] where relevance_score is 0-100"
+                  ),
+                  description="Array of tuples, each containing [node_id, relevance_score]",
+                  minItems=1,
+              )
+          },
+          required=(["reasoning"] if require_reasoning else []) + ["ranking", "relevance_scores"]
+      )
+      return tree_traversal_response_schema
+    else:
+      response_dict = {
+        "type": "object",
+        "properties": ({
+            "reasoning": {
+                  "type": "string",
+                  "description": "Step-by-step analysis of why each document is relevant or irrelevant based on the relevance definition"
+              }} if require_reasoning else {}) | {
+              "ranking": {
+                  "type": "array",
+                  "items": {"type": "integer"},
+                  "description": "Array of integers representing the order of the candidates by their node_id",
+                  "minItems": 1,
+              },
+              "relevance_scores": {
+                  "type": "array",
+                  "items": {
+                      "type": "array",
+                      "items": {"type": "integer"},
+                      "description": "Tuple of [node_id, relevance_score] where relevance_score is 0-100"
+                  },
+                  "description": "Array of tuples, each containing [node_id, relevance_score]",
+                  "minItems": 1, 
+              }
+          },
+          "required": (["reasoning"] if require_reasoning else []) + ["ranking", "relevance_scores"]
+      }
+      return response_dict
 
 def get_traversal_prompt(query, child_desc_list, hp, logger, return_constraint=True, **kwargs):
   max_desc_char_len = None

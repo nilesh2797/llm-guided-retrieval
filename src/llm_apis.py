@@ -3,7 +3,7 @@ import asyncio
 import os
 import time
 import logging
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from abc import ABC
 from abc import abstractmethod
 from tqdm.asyncio import tqdm as async_tqdm
@@ -13,6 +13,7 @@ from collections import defaultdict, Counter
 
 from google import genai
 from google.genai.types import GenerateContentConfig
+from openai import AsyncOpenAI
 
 from utils import validate_genai_response_constraint
 
@@ -319,6 +320,7 @@ class LanguageModelAPI(ABC):
         metrics = BatchMetrics()
         max_concurrent_calls = kwargs.pop('max_concurrent_calls', None)
         print_summary_report = kwargs.pop('print_summary_report', True)
+        staggering_delay = kwargs.pop('staggering_delay', 0.1)
         
         if max_concurrent_calls:
             semaphore = asyncio.Semaphore(max_concurrent_calls)
@@ -327,7 +329,7 @@ class LanguageModelAPI(ABC):
             async def _semaphore_run(prompt: str, index: int) -> str:
                 async with semaphore:
                     # Add small delay to space out requests
-                    await asyncio.sleep((index % max_concurrent_calls) * 0.1)
+                    await asyncio.sleep((index % max_concurrent_calls) * staggering_delay)
                     return await self.run(prompt, batch_metrics=metrics, prompt_index=index, **kwargs)
 
             tasks = [
@@ -373,9 +375,8 @@ class LanguageModelAPI(ABC):
             metrics.print_summary_report(len(prompts), self.logger)
         
         return final_results
-    
-#@title `GenAIAPI` implementation
 
+#@title `GenAIAPI` implementation
 class GenAIAPI(LanguageModelAPI):
     """
     Google Generative AI implementation of the LanguageModelAPI.
@@ -531,7 +532,260 @@ class GenAIAPI(LanguageModelAPI):
     def update_config(self, **kwargs: Any) -> None:
         """
         Update default configuration parameters.
-        
+
+        Args:
+            **kwargs: Configuration parameters to update
+        """
+        self.default_config.update(kwargs)
+        self.logger.info(f"Updated config: {kwargs}")
+
+#@title `VllmAPI` implementation
+class VllmAPI(LanguageModelAPI):
+    """
+    vLLM implementation of the LanguageModelAPI.
+
+    vLLM is a fast and memory-efficient inference and serving engine for LLMs.
+    This implementation uses the OpenAI-compatible API interface that vLLM provides.
+
+    Supports both string prompts and chat-style conversation lists.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        base_url: str = "http://localhost:8000/v1",
+        api_key: Optional[str] = "EMPTY",
+        timeout: int = 60,
+        max_retries: int = 3,
+        logger: Optional[logging.Logger] = None,
+        load_balance: bool = False,
+        **kwargs: Any,
+    ):
+        """
+        Initialize vLLM API client.
+
+        Args:
+            model_name (str): Model to use (should match the model served by vLLM)
+            base_url (str): Base URL of the vLLM server (default: "http://localhost:8000/v1")
+                           Can be a comma-separated list of URLs for load balancing
+            api_key (Optional[str]): API key. vLLM typically doesn't require authentication,
+                                     so "EMPTY" is used by default
+            timeout (int): Request timeout in seconds
+            max_retries (int): Maximum retry attempts
+            logger (Optional[logging.Logger]): Logger instance
+            load_balance (bool): Enable round-robin load balancing across multiple servers
+            **kwargs: Additional config parameters (temperature, max_tokens, top_p, etc.)
+        """
+        # Get base URL from environment if available
+        base_url = os.getenv('VLLM_BASE_URL', base_url)
+
+        super().__init__(model_name, api_key, timeout, max_retries, logger, **kwargs)
+
+        # Handle multiple base URLs for load balancing
+        self.base_urls = [url.strip() for url in base_url.split(',')]
+        self.load_balance = load_balance or len(self.base_urls) > 1
+        self.current_url_index = 0
+
+        # Initialize OpenAI clients for each server
+        if self.load_balance:
+            self.clients = [
+                AsyncOpenAI(base_url=url, api_key=self.api_key, timeout=self.timeout)
+                for url in self.base_urls
+            ]
+            self.logger.info(f"Initialized vLLM client with load balancing across {len(self.base_urls)} servers")
+            for i, url in enumerate(self.base_urls):
+                self.logger.info(f"  Server {i}: {url}")
+        else:
+            self.client = AsyncOpenAI(
+                base_url=self.base_urls[0],
+                api_key=self.api_key,
+                timeout=self.timeout,
+            )
+            self.logger.info(f"Initialized vLLM client with model: {self.model_name} at {self.base_urls[0]}")
+
+        # Store default config parameters
+        self.default_config = {}
+
+    def _format_prompt(self, prompt: Any) -> List[Dict[str, str]]:
+        """
+        Format prompt for vLLM API (OpenAI-compatible format).
+
+        Args:
+            prompt: Can be a string or list of chat messages
+
+        Returns:
+            List of message dictionaries in OpenAI chat format
+        """
+        if isinstance(prompt, str):
+            # Convert simple string to chat format
+            return [{"role": "user", "content": prompt}]
+        elif isinstance(prompt, list):
+            # Handle chat-style conversations
+            formatted_messages = []
+            for msg in prompt:
+                if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                    # Already in correct format
+                    formatted_messages.append(msg)
+                elif isinstance(msg, dict):
+                    # Has dict structure but might need reformatting
+                    role = msg.get('role', 'user')
+                    content = msg.get('content', str(msg))
+                    formatted_messages.append({"role": role, "content": content})
+                else:
+                    # Convert other types to user messages
+                    formatted_messages.append({"role": "user", "content": str(msg)})
+            return formatted_messages
+        else:
+            self.logger.warning(f"Unexpected prompt type: {type(prompt)}, converting to string")
+            return [{"role": "user", "content": str(prompt)}]
+
+    def _get_client(self) -> AsyncOpenAI:
+        """
+        Get the appropriate client for the next request.
+        Uses round-robin load balancing if multiple servers are configured.
+
+        Returns:
+            AsyncOpenAI client instance
+        """
+        if not self.load_balance:
+            return self.client
+
+        # Round-robin load balancing
+        client = self.clients[self.current_url_index]
+        self.current_url_index = (self.current_url_index + 1) % len(self.clients)
+        return client
+
+    async def _call_api(self, prompt: List[Dict[str, str]], **kwargs: Any) -> Any:
+        """
+        Make async API call to vLLM server.
+
+        Args:
+            prompt (List[Dict[str, str]]): Formatted prompt as list of message dicts
+            **kwargs: Additional parameters for this specific call
+
+        Returns:
+            Raw API response
+        """
+        # Merge default config with call-specific parameters
+        config_params = {**self.default_config, **kwargs}
+
+        # Remove non-API parameters that might be passed from parent class
+        config_params.pop('max_retries', None)
+        config_params.pop('timeout', None)
+        config_params.pop('prompt_index', None)
+
+        # Handle response_schema for constrained decoding
+        response_schema = config_params.pop('response_schema', None)
+        guided_decoding_backend = config_params.pop('guided_decoding_backend', None)
+
+        if response_schema:
+            # Convert to vLLM's guided_json format
+            # vLLM expects the schema as a JSON object
+            import json
+
+            # Prepare extra_body for guided generation
+            extra_body = config_params.get('extra_body', {})
+
+            if isinstance(response_schema, dict):
+                extra_body['guided_json'] = response_schema
+            elif isinstance(response_schema, str):
+                extra_body['guided_json'] = json.loads(response_schema)
+
+            # Optionally specify the backend (outlines, lm-format-enforcer, or xgrammar)
+            # If not specified, vLLM will use its default
+            if guided_decoding_backend:
+                extra_body['guided_decoding_backend'] = guided_decoding_backend
+
+            config_params['extra_body'] = extra_body
+            self.logger.debug(f"Using guided JSON generation with schema")
+
+        try:
+            # Get client (handles load balancing if enabled)
+            client = self._get_client()
+
+            response = await client.chat.completions.create(
+                model=self.model_name,
+                messages=prompt,
+                **config_params
+            )
+            return response
+        except Exception as e:
+            self.logger.debug(f"vLLM API call failed: {str(e)}")
+            raise
+
+    def _validate_and_parse_response(self, response: Any, **kwargs) -> str:
+        """
+        Validate and extract text from vLLM response.
+
+        Args:
+            response: Raw API response object (OpenAI-compatible format)
+            **kwargs: Additional validation parameters
+
+        Returns:
+            Generated text string
+
+        Raises:
+            ValueError: If response is invalid or empty
+        """
+        try:
+            if not response:
+                raise ValueError("Empty response from API")
+
+            if not hasattr(response, 'choices') or not response.choices:
+                raise ValueError("Response missing 'choices' attribute or choices are empty")
+
+            # Extract text from first choice
+            choice = response.choices[0]
+            if not hasattr(choice, 'message'):
+                raise ValueError("Choice missing 'message' attribute")
+
+            message = choice.message
+            if not hasattr(message, 'content'):
+                raise ValueError("Message missing 'content' attribute")
+
+            text = message.content
+            if not text or not text.strip():
+                raise ValueError("Empty text in response")
+
+            # Optional: validate against response schema if provided
+            constraint = kwargs.get('response_schema', None)
+            if constraint:
+                is_valid, error = validate_genai_response_constraint(text, constraint)
+                if not is_valid:
+                    raise ValueError(f"Response does not conform to schema: {error}")
+
+            return text.strip()
+
+        except Exception as e:
+            self.logger.debug(f"Failed to parse response: {str(e)}")
+            raise ValueError(f"Invalid response format: {str(e)}")
+
+    def get_usage_info(self) -> Dict[str, Any]:
+        """
+        Get usage information from the last response in history.
+
+        Returns:
+            Dictionary with usage metadata if available
+        """
+        if not self.history:
+            return {}
+
+        last_entry = self.history[-1]
+        return last_entry.get('usage', {})
+
+    def update_config(self, **kwargs: Any) -> None:
+        """
+        Update default configuration parameters.
+
+        Common parameters for vLLM:
+        - temperature: Float (0.0 to 2.0)
+        - max_tokens: Integer
+        - top_p: Float (0.0 to 1.0)
+        - top_k: Integer
+        - frequency_penalty: Float (-2.0 to 2.0)
+        - presence_penalty: Float (-2.0 to 2.0)
+        - stop: List[str] or str
+
         Args:
             **kwargs: Configuration parameters to update
         """

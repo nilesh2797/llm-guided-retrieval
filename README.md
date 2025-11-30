@@ -2,6 +2,7 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-2510.13217-b31b1b.svg)](https://arxiv.org/abs/2510.13217)
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Blog](https://img.shields.io/badge/Blog-Read%20More-yellow.svg)](https://nilesh2797.github.io/publications/lattice)
 <!-- [![GitHub stars](https://img.shields.io/github/stars/nilesh2797/lattice.svg?style=social&label=Star)](https://github.com/nilesh2797/lattice) -->
 
 **Official implementation of [LLM-Guided Hierarchical Retrieval](https://arxiv.org/abs/2510.13217)**  
@@ -44,20 +45,99 @@ Read more in the [blog](https://nilesh2797.github.io/publications/lattice) / [pa
    ```
 
 4. **Set up API credentials:**
+
+   For Google GenAI (default):
    ```bash
    export GOOGLE_API_KEY=your_api_key_here
    ```
 
+   For vLLM (see [vLLM Setup](#running-with-vllm) below):
+   ```bash
+   # Start vLLM cluster first, then run experiments
+   ```
+
 ### Quick Start
+
+#### Running with Google GenAI (default)
 Run a single experiment:
 ```bash
-cd src; python run.py --subset biology --tree_version bottom-up --num_iters 20
+cd src
+python run.py --subset biology --tree_version bottom-up --num_iters 20
 ```
 
-Batch Experiments
+Batch experiments:
 ```bash
-cd src; bash run.sh
+cd src
+bash run.sh
 ```
+
+#### Running with vLLM
+
+**1. Start the vLLM cluster:**
+
+For data parallel mode (recommended for throughput):
+```bash
+cd scripts
+./start_vllm_cluster.sh "Qwen/Qwen3-VL-8B-Instruct" data
+```
+
+For tensor parallel mode (for larger models):
+```bash
+cd scripts
+./start_vllm_cluster.sh "meta-llama/Llama-2-70b-hf" tensor
+```
+
+The cluster will start 4 vLLM servers on ports 8000-8003 (data parallel) or a single server on port 8000 (tensor parallel).
+
+**2. Check cluster status:**
+```bash
+cd scripts
+./check_vllm_cluster.sh
+```
+
+**3. Run experiments with vLLM backend:**
+
+Single experiment:
+```bash
+cd src
+python run.py \
+  --subset biology \
+  --tree_version bottom-up \
+  --num_iters 20 \
+  --llm_api_backend vllm \
+  --llm Qwen/Qwen3-VL-8B-Instruct \
+  --llm_api_timeout 60 \
+  --llm_api_max_retries 3
+```
+
+Edit [src/run.sh](src/run.sh) to enable vLLM for batch experiments:
+```bash
+# Uncomment these lines in COMMON_PARAMS:
+--llm_api_backend vllm
+--llm_api_staggering_delay 0.02
+--llm_api_timeout 60
+--llm_api_max_retries 3
+--llm Qwen/Qwen3-VL-8B-Instruct
+```
+
+Then run:
+```bash
+cd src
+bash run.sh
+```
+
+**4. Stop the vLLM cluster when done:**
+```bash
+cd scripts
+./stop_vllm_cluster.sh
+```
+
+**vLLM Configuration:**
+- **Data Parallel Mode**: Runs 4 independent servers (one per GPU) on ports 8000-8003. Best for maximum throughput with smaller models.
+- **Tensor Parallel Mode**: Splits model across 4 GPUs on a single server (port 8000). Necessary for models that don't fit on a single GPU.
+- Default GPU memory utilization: 95%
+- Default max model length: 128K tokens
+- GPU IDs used: 0, 1, 3, 4 (configurable in [scripts/start_vllm_cluster.sh](scripts/start_vllm_cluster.sh))
 
 ### Configuration
 
@@ -72,6 +152,13 @@ cd src; bash run.sh
 | `--rerank` | Additional reranking on final results | False |
 | `--load_existing` | Resume from checkpoint defined by hyperparams | False |
 | `--suffix` | Experiment name suffix | - |
+| **vLLM-specific parameters** | | |
+| `--llm_api_backend` | LLM API backend (genai or vllm) | genai |
+| `--llm` | Model name to use | gemini-2.0-flash-thinking-exp-01-21 |
+| `--llm_api_timeout` | API call timeout in seconds | 180 |
+| `--llm_api_max_retries` | Maximum number of API retries | 5 |
+| `--llm_max_concurrent_calls` | Maximum concurrent API calls | 50 |
+| `--llm_api_staggering_delay` | Delay between staggered API calls (seconds) | 0.1 |
 
 For a complete list, see [`src/hyperparams.py`](src/hyperparams.py).
 
@@ -85,15 +172,19 @@ lattice/release/
 |   ├── run.ipynb           # Jupyter notebook for running / debugging experiments
 │   ├── hyperparams.py      # Hyperparameter definitions
 │   ├── tree_objects.py     # Semantic tree and sample objects
-│   ├── llm_apis.py         # LLM API wrappers
+│   ├── llm_apis.py         # LLM API wrappers (GenAI and vLLM)
 │   ├── prompts.py          # Prompt templates
 │   ├── utils.py            # Utility functions
 │   └── calib_utils.py      # Calibration utilities
+├── scripts/
+│   ├── start_vllm_cluster.sh   # Start vLLM servers (data/tensor parallel)
+│   ├── stop_vllm_cluster.sh    # Stop vLLM servers
+│   └── check_vllm_cluster.sh   # Check vLLM server status
 ├── trees/
 │   └── BRIGHT/             # Pre-built semantic trees
 ├── results/
 │   └── BRIGHT/             # Experiment results
-└── logs/                   # Execution logs
+└── logs/                   # Execution logs (including vLLM server logs)
 ```
 
 ## 📈 Results

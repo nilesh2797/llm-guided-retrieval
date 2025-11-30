@@ -124,6 +124,7 @@ class CalibModel:
         self.slates = []
         self.scores = []
         self.model = None
+        self.trained = False
         # we keep full-space theta here:
         self.theta_full = np.full((total_N,), float(0.0))
 
@@ -136,9 +137,11 @@ class CalibModel:
             raise ValueError('relevance_scores should be a dict or list of (idx, score) pairs')
         
         slate, scores = list(zip(*relevance_scores))
-        assert all([score <= 1.001 and score >= -0.001 for score in scores]), f'Scores should be in [0, 1]: {scores}'
+        if not all([score <= 1.001 and score >= -0.001 for score in scores]):
+            print(f'Warning: Scores should be in [0, 1]: {scores}')
         self.slates.append(slate)
         self.scores.append(scores)
+        self.trained = False
 
     def fit(self, verbose=False):
         # Build mapping from original indices to compact 0..M-1
@@ -191,6 +194,7 @@ class CalibModel:
         self.theta_full = full_theta.numpy() * self.a
         self.theta_full /= self.theta_full.max()  # normalize to max 1.0
         self.new_mapping = new_mapping  # keep for reference
+        self.trained = True
 
     @property
     def theta(self):
@@ -213,18 +217,12 @@ class CalibModel:
             'maxiter': self.maxiter,
             'clip_grad': self.clip_grad,
             'lambda_mse': self.lambda_mse,
-            'theta': self.theta.tolist(),
             'slates': self.slates,
             'scores': self.scores,
-            'a': self.a,
-            'b_s': self.b_s.tolist()
         }
 
     def load_dict(self, d):
         self.__dict__.update({k: v for k, v in d.items() if k not in ['theta', 'b_s']})
-        if 'theta' in d:
-            self.theta_full = torch.tensor(d['theta'], dtype=torch.float)
-        # Note: a and b_s are not loaded into model; they are only available after fit
-        self.loaded_a = d.get('a', 1.0)
-        self.loaded_b_s = torch.tensor(d.get('b_s', [0.0]*len(self.slates)), dtype=torch.float)
+        if 'slates' in d and 'scores' in d:
+            self.fit()  # refit model to get theta, a, b_s
         return self

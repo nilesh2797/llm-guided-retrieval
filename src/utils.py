@@ -85,7 +85,7 @@ def get_node_id(id, docs_df):
     return None
 
 #region Saving and loading results helper functions
-def save_exp(RESULTS_DIR, hp, llm_api, eval_samples, all_eval_metric_dfs, allow_overwrite=False):
+def save_exp(RESULTS_DIR, hp, llm_api, eval_samples, all_eval_metric_dfs, allow_overwrite=False, save_llm_api_history=False):
   def sanitize_dict(d):
     if isinstance(d, dict):
       return {k: sanitize_dict(v) for k, v in d.items() if any([isinstance(v, allowed) for allowed in PICKLE_ALLOWED_CLASSES])}
@@ -109,7 +109,8 @@ def save_exp(RESULTS_DIR, hp, llm_api, eval_samples, all_eval_metric_dfs, allow_
   pd.concat(all_eval_metric_dfs, axis=1, keys=[f'Iter {i}' for i in range(len(all_eval_metric_dfs))]).to_pickle(eval_metrics_dump_path)
   # print(f'Saved metrics to {eval_metrics_dump_path}')
 
-  pkl.dump(llm_api.history, open(llm_api_history_dump_path, 'wb'))
+  if save_llm_api_history:
+    pkl.dump(llm_api.history, open(llm_api_history_dump_path, 'wb'))
 
 def load_exp(RESULTS_DIR, hp, semantic_root_node, node_registry, logger, hp_str=None):
   if hp_str is None:
@@ -447,7 +448,7 @@ def visualize_sample(sample, width=1400, height=1000, save_path=None, max_step=1
         node_indices_text.append('R' if not node.path else str(node.path[-1]))
 
         wrapped_desc = wrap_text_for_plotly(node.desc)
-        wrapped_reasoning = wrap_text_for_plotly(node.reasoning if isinstance(node.reasoning, str) else '\n'.join(map(str, node.reasoning)))
+        wrapped_reasoning = wrap_text_for_plotly(str(node.reasoning) if not isinstance(node.reasoning, list) else '\n'.join(map(str, node.reasoning)))
         child_relevances = sorted([(i, v) for i, v in enumerate(node.child_relevances)], key=lambda x: x[1], reverse=True) if node.child_relevances else []
         child_relevances = wrap_text_for_plotly('; '.join([f'{i}: {v}' for i, v in child_relevances]))
         if node.is_leaf or node.path_relevance > 0:

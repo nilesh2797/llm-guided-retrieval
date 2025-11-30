@@ -6,11 +6,12 @@ import asyncio
 from tqdm.autonotebook import tqdm
 import os
 import logging
+from typing import List
 from datasets import load_dataset
 from google.genai import types
 from hyperparams import HyperParams
 from tree_objects import SemanticNode, InferSample
-from llm_apis import GenAIAPI
+from llm_apis import GenAIAPI, VllmAPI
 from prompts import get_traversal_prompt_response_constraint, get_reranking_prompt
 from utils import (
     setup_logger, 
@@ -32,7 +33,7 @@ np.random.seed(42)
 #region Setup
 hp = HyperParams.from_args()
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RESULTS_DIR = f'{BASE_DIR}/results/BRIGHT/{hp.SUBSET}/'
+RESULTS_DIR = f'{BASE_DIR}/results/{hp.DATASET}/{hp.SUBSET}/'
 os.makedirs(RESULTS_DIR, exist_ok=True)
 logger = setup_logger('lattice_runner', f"{RESULTS_DIR}/{hp}.log", logging.INFO)
 
@@ -42,11 +43,17 @@ logger.info(f"Initialized wandb run: {run_name}")
 #endregion
 
 #region Data loading
-docs_df = pd.DataFrame(load_dataset('xlangai/BRIGHT', 'documents', split=hp.SUBSET))
-examples_df = pd.DataFrame(load_dataset('xlangai/BRIGHT', 'examples', split=hp.SUBSET))
+if os.path.exists(f'{BASE_DIR}/data/{hp.DATASET}/{hp.SUBSET}/documents.jsonl'):
+    docs_df = pd.read_json(f'{BASE_DIR}/data/{hp.DATASET}/{hp.SUBSET}/documents.jsonl', lines=True, dtype={'id': str})
+    examples_df = pd.read_json(f'{BASE_DIR}/data/{hp.DATASET}/{hp.SUBSET}/examples.jsonl', lines=True, dtype={'gold_ids': List[str]})
+    examples_df['gold_ids'] = examples_df['gold_ids'].apply(lambda x: [str(i) for i in x])
+else:
+    docs_df = pd.DataFrame(load_dataset('xlangai/BRIGHT', 'documents', split=hp.SUBSET))
+    examples_df = pd.DataFrame(load_dataset('xlangai/BRIGHT', 'examples', split=hp.SUBSET))
+    
 doc_id_to_content = {docs_df.iloc[i].id: docs_df.iloc[i].content for i in range(len(docs_df))}
 
-tree_dict = pkl.load(open(f'{BASE_DIR}/trees/BRIGHT/{hp.SUBSET}/tree-{hp.TREE_VERSION}.pkl', 'rb'))
+tree_dict = pkl.load(open(f'{BASE_DIR}/trees/{hp.DATASET}/{hp.SUBSET}/tree-{hp.TREE_VERSION}.pkl', 'rb'))
 semantic_root_node = SemanticNode().load_dict(tree_dict) if isinstance(tree_dict, dict) else tree_dict
 node_registry = compute_node_registry(semantic_root_node)
 all_leaf_nodes = get_all_leaf_nodes_with_path(semantic_root_node)
@@ -54,16 +61,25 @@ doc_id_to_path = {get_node_id(leaf.id, docs_df): path for leaf, path in all_leaf
 #endregion
 
 #region Setup LLM API and Eval Samples
-if hp.LLM_API_BACKEND == 'genai': llm_api = GenAIAPI(hp.LLM, logger=logger, timeout=hp.LLM_API_TIMEOUT, max_retries=hp.LLM_API_MAX_RETRIES)
+if hp.LLM_API_BACKEND == 'genai': 
+    llm_api = GenAIAPI(hp.LLM, logger=logger, timeout=hp.LLM_API_TIMEOUT, max_retries=hp.LLM_API_MAX_RETRIES)
+elif hp.LLM_API_BACKEND == 'vllm': 
+    llm_api = VllmAPI(hp.LLM, logger=logger, timeout=hp.LLM_API_TIMEOUT, max_retries=hp.LLM_API_MAX_RETRIES, base_url=','.join([f"http://localhost:{8000+i}/v1" for i in range(4)]))
 else: raise ValueError(f'Unknown LM API backend: {hp.LLM_API_BACKEND}')
 
 llm_api_kwargs = {
     'max_concurrent_calls': hp.LLM_MAX_CONCURRENT_CALLS,
     'response_mime_type': 'application/json',
     'response_schema': get_traversal_prompt_response_constraint(bool(hp.REASONING_IN_TRAVERSAL_PROMPT)),
+    'staggering_delay': hp.LLM_API_STAGGERING_DELAY,
     # 'temperature': 0.8,
     'thinking_config': types.ThinkingConfig(thinking_budget=hp.REASONING_IN_TRAVERSAL_PROMPT),
 }
+
+if hp.LLM_API_BACKEND == 'vllm':
+    llm_api_kwargs.pop('response_mime_type')
+    llm_api_kwargs.pop('thinking_config')
+    llm_api_kwargs.pop('response_schema')
 
 if hp.LOAD_EXISTING and os.path.exists(f'{RESULTS_DIR}/all_eval_sample_dicts-{hp}.pkl'):
   all_eval_samples, all_eval_metric_dfs = load_exp(RESULTS_DIR, hp, semantic_root_node, node_registry, logger)
@@ -74,13 +90,16 @@ if hp.LOAD_EXISTING and os.path.exists(f'{RESULTS_DIR}/all_eval_sample_dicts-{hp
 else: 
   all_eval_samples, all_eval_metric_dfs = [], []
   for i in range(min(examples_df.shape[0], hp.NUM_EVAL_SAMPLES)):
+    gold_paths = [doc_id_to_path[doc_id] for doc_id in examples_df.iloc[i]['gold_ids'] if doc_id in doc_id_to_path]
+    if len(gold_paths) < len(examples_df.iloc[i]['gold_ids']):
+        logger.warning(f"Some gold IDs for example {i} not found in document paths.")
     sample = InferSample(
         semantic_root_node,
         node_registry,
         hp=hp,
         logger=logger,
         query=examples_df.iloc[i]['query'][:hp.MAX_QUERY_CHAR_LEN],
-        gold_paths=[doc_id_to_path[docid] for docid in examples_df.iloc[i]['gold_ids']],
+        gold_paths=gold_paths,
         excluded_ids_set=set(examples_df.iloc[i]['excluded_ids']),
         )
     all_eval_samples.append(sample)
