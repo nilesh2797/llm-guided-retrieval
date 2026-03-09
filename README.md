@@ -4,6 +4,7 @@
 [![Colab](https://img.shields.io/badge/Colab-Notebook-blue.svg)](https://colab.research.google.com/drive/1AwDrHzipFVe-9kNAUJjCC4CNL4soRsqb?usp=sharing)
 [![GitHub license](https://img.shields.io/badge/license-MIT-black.svg)](LICENSE)
 [![Blog](https://img.shields.io/badge/Blog-Read%20More-yellow.svg)](https://nilesh2797.github.io/publications/lattice)
+![Visitors](https://visitor-badge.laobi.icu/badge?page_id=nilesh2797.llm-guided-retrieval)
 
 <!-- [![GitHub stars](https://img.shields.io/github/stars/nilesh2797/lattice.svg?style=social&label=Star)](https://github.com/nilesh2797/lattice) -->
 
